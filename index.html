@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jelly slider</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100dvh;
+      touch-action: none;
+    }
+
+    #attribution {
+      opacity: 1;
+      position: fixed;
+      bottom: 0.625rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 0.75rem 1rem;
+      border-radius: 0.625rem;
+      user-select: none;
+      pointer-events: auto;
+      transition: opacity 0.5s;
+      font-size: 1rem;
+      text-align: center;
+      white-space: nowrap;
+    }
+    #attribution a {
+      color: #87ceeb;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    #attribution a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <canvas></canvas>
+  <script type="module" src="/index.ts"></script>
+</body>
+</html>
