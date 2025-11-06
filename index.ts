@@ -58,7 +58,7 @@ async function clampCanvasBackingSize(canvas: HTMLCanvasElement) {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const maxCss = Math.max(cssW, cssH);
     const maxSafeDpr = Math.max(1, Math.floor(MAX_TEX / Math.max(1, maxCss)));
-    const effDpr = Math.min(dpr, maxSafeDpr);
+    const effDpr = Math.min(dpr, Math.min(maxSafeDpr, 2));
     const width = Math.min(MAX_TEX, Math.round(cssW * effDpr));
     const height = Math.min(MAX_TEX, Math.round(cssH * effDpr));
     if (canvas.width !== width) canvas.width = width;
@@ -79,6 +79,60 @@ async function clampCanvasBackingSize(canvas: HTMLCanvasElement) {
   }, 500);
 }
 
+async function preflightClear(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
+  if (!ctx) {
+    showOverlay('Unable to get WebGPU canvas context.');
+    throw new Error('No webgpu context');
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    showOverlay('No compatible GPU adapter found.');
+    throw new Error('No adapter');
+  }
+  const device = await adapter.requestDevice();
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  const configure = () => {
+    ctx.configure({
+      device,
+      format,
+      alphaMode: 'premultiplied',
+      colorSpace: 'srgb'
+    } as GPUCanvasConfiguration);
+  };
+  configure();
+
+  try {
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: ctx.getCurrentTexture().createView(),
+        clearValue: { r: 0.1, g: 0.2, b: 0.9, a: 1 },
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]
+    });
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  } catch (e) {
+    showOverlay('Failed to draw to canvas. Reducing resolution.');
+    canvas.width = Math.max(1, Math.floor(canvas.width * 0.75));
+    canvas.height = Math.max(1, Math.floor(canvas.height * 0.75));
+    configure();
+    const encoder2 = device.createCommandEncoder();
+    const pass2 = encoder2.beginRenderPass({
+      colorAttachments: [{
+        view: ctx.getCurrentTexture().createView(),
+        clearValue: { r: 0.9, g: 0.2, b: 0.1, a: 1 },
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]
+    });
+    pass2.end();
+    device.queue.submit([encoder2.finish()]);
+  }
+}
+
 const canvases = Array.from(document.querySelectorAll('canvas')) as HTMLCanvasElement[];
 if (canvases.length === 0) {
   const c = document.createElement('canvas');
@@ -90,10 +144,10 @@ canvases.forEach(applyFullscreenCanvasStyles);
 (async () => {
   try {
     await clampCanvasBackingSize(canvases[0]);
+    await preflightClear(canvases[0]);
   } catch (e) {
     console.error(e);
     return;
   }
-
   import('./src/index.ts');
 })();

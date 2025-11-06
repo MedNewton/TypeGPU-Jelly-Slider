@@ -45,21 +45,20 @@ import {
 } from './constants.ts';
 import { NumberProvider } from './numbers.ts';
 
-const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 const context = canvas.getContext('webgpu') as GPUCanvasContext;
+const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
-const root = await tgpu.init({
-  device: { optionalFeatures: ['timestamp-query'] },
-});
+const root = await tgpu.init({ device: { optionalFeatures: ['timestamp-query'] } });
 const hasTimestampQuery = root.enabledFeatures.has('timestamp-query');
 
 function configureContext() {
   context.configure({
     device: root.device,
     format: presentationFormat,
-    alphaMode: 'opaque',
-  });
+    alphaMode: 'premultiplied',
+    colorSpace: 'srgb'
+  } as GPUCanvasConfiguration);
 }
 
 configureContext();
@@ -78,9 +77,7 @@ const bezierBbox = slider.bbox;
 
 const digitsProvider = new NumberProvider(root);
 await digitsProvider.fillAtlas();
-const digitsTextureView = digitsProvider.digitTextureAtlas.createView(
-  d.texture2dArray(d.f32),
-);
+const digitsTextureView = digitsProvider.digitTextureAtlas.createView(d.texture2dArray(d.f32));
 
 let qualityScale = 1;
 
@@ -88,7 +85,7 @@ function clampQualityToLimits(scale: number) {
   const maxDim = root.device.limits.maxTextureDimension2D;
   const maxCss = Math.max(canvas.width, canvas.height);
   const maxScale = Math.min(1, maxDim / Math.max(1, maxCss));
-  return Math.max(0.3, Math.min(scale, maxScale));
+  return Math.max(0.3, Math.min(scale, Math.min(maxScale, 2)));
 }
 
 qualityScale = clampQualityToLimits(qualityScale);
@@ -178,16 +175,8 @@ const cap3D = (position: d.v3f) => {
   const endCap = slider.endCapUniform.$;
   const secondLastPoint = d.vec2f(endCap.x, endCap.y);
   const lastPoint = d.vec2f(endCap.z, endCap.w);
-  const angle = std.atan2(
-    lastPoint.y - secondLastPoint.y,
-    lastPoint.x - secondLastPoint.x,
-  );
-  const rot = d.mat2x2f(
-    std.cos(angle),
-    -std.sin(angle),
-    std.sin(angle),
-    std.cos(angle),
-  );
+  const angle = std.atan2(lastPoint.y - secondLastPoint.y, lastPoint.x - secondLastPoint.x);
+  const rot = d.mat2x2f(std.cos(angle), -std.sin(angle), std.sin(angle), std.cos(angle));
   let pieP = position.sub(d.vec3f(secondLastPoint, 0));
   pieP = d.vec3f(rot.mul(pieP.xy), pieP.z);
   const hmm = sdf.sdPie(pieP.zx, d.vec2f(1, 0), LINE_HALF_THICK);
@@ -202,8 +191,7 @@ const sliderSdf3D = (position: d.v3f) => {
   if (poly2D.t > 0.94) {
     finalDist = cap3D(position);
   } else {
-    const body = sdf.opExtrudeZ(position, poly2D.distance, LINE_HALF_THICK) -
-      LINE_RADIUS;
+    const body = sdf.opExtrudeZ(position, poly2D.distance, LINE_HALF_THICK) - LINE_RADIUS;
     finalDist = body;
   }
   return LineInfo({ t: poly2D.t, distance: finalDist, normal: poly2D.normal });
@@ -239,12 +227,9 @@ const sliderApproxDist = (position: d.v3f) => {
   'use gpu';
   const bbox = getSliderBbox();
   const p = position.xy;
-  if (p.x < bbox.left || p.x > bbox.right || p.y < bbox.bottom || p.y > bbox.top) {
-    return 1e9;
-  }
+  if (p.x < bbox.left || p.x > bbox.right || p.y < bbox.bottom || p.y > bbox.top) return 1e9;
   const poly2D = sdInflatedPolyline2D(p);
-  const dist3D = sdf.opExtrudeZ(position, poly2D.distance, LINE_HALF_THICK) -
-    LINE_RADIUS;
+  const dist3D = sdf.opExtrudeZ(position, poly2D.distance, LINE_HALF_THICK) - LINE_RADIUS;
   return dist3D;
 };
 
@@ -273,22 +258,20 @@ const getSceneDistForAO = (position: d.v3f) => {
 
 const sdfSlot = tgpu.slot<(pos: d.v3f) => number>();
 
-const getNormalFromSdf = tgpu.fn([d.vec3f, d.f32], d.vec3f)(
-  (position, epsilon) => {
-    'use gpu';
-    const k = d.vec3f(1, -1, 0);
-    const offset1 = k.xyy.mul(epsilon);
-    const offset2 = k.yyx.mul(epsilon);
-    const offset3 = k.yxy.mul(epsilon);
-    const offset4 = k.xxx.mul(epsilon);
-    const sample1 = offset1.mul(sdfSlot.$(position.add(offset1)));
-    const sample2 = offset2.mul(sdfSlot.$(position.add(offset2)));
-    const sample3 = offset3.mul(sdfSlot.$(position.add(offset3)));
-    const sample4 = offset4.mul(sdfSlot.$(position.add(offset4)));
-    const gradient = sample1.add(sample2).add(sample3).add(sample4);
-    return std.normalize(gradient);
-  },
-);
+const getNormalFromSdf = tgpu.fn([d.vec3f, d.f32], d.vec3f)((position, epsilon) => {
+  'use gpu';
+  const k = d.vec3f(1, -1, 0);
+  const offset1 = k.xyy.mul(epsilon);
+  const offset2 = k.yyx.mul(epsilon);
+  const offset3 = k.yxy.mul(epsilon);
+  const offset4 = k.xxx.mul(epsilon);
+  const sample1 = offset1.mul(sdfSlot.$(position.add(offset1)));
+  const sample2 = offset2.mul(sdfSlot.$(position.add(offset2)));
+  const sample3 = offset3.mul(sdfSlot.$(position.add(offset3)));
+  const sample4 = offset4.mul(sdfSlot.$(position.add(offset4)));
+  const gradient = sample1.add(sample2).add(sample3).add(sample4);
+  return std.normalize(gradient);
+});
 
 const getNormalCapSdf = getNormalFromSdf.with(sdfSlot, cap3D);
 const getNormalMainSdf = getNormalFromSdf.with(sdfSlot, getMainSceneDist);
@@ -300,9 +283,7 @@ const getNormalCap = (pos: d.v3f) => {
 
 const getNormalMain = (position: d.v3f) => {
   'use gpu';
-  if (std.abs(position.z) > 0.22 || std.abs(position.x) > 1.02) {
-    return d.vec3f(0, 1, 0);
-  }
+  if (std.abs(position.z) > 0.22 || std.abs(position.x) > 1.02) return d.vec3f(0, 1, 0);
   return getNormalMainSdf(position, 0.0001);
 };
 
@@ -312,21 +293,14 @@ const getSliderNormal = (position: d.v3f, hitInfo: d.Infer<typeof HitInfo>) => {
   const gradient2D = poly2D.normal;
   const threshold = LINE_HALF_THICK * 0.85;
   const absZ = std.abs(position.z);
-  const zDistance = std.max(
-    0,
-    (absZ - threshold) * LINE_HALF_THICK / (LINE_HALF_THICK - threshold),
-  );
+  const zDistance = std.max(0, (absZ - threshold) * LINE_HALF_THICK / (LINE_HALF_THICK - threshold));
   const edgeDistance = LINE_RADIUS - poly2D.distance;
   const edgeContrib = 0.9;
   const zContrib = 1.0 - edgeContrib;
   const zDirection = std.sign(position.z);
   const zAxisVector = d.vec3f(0, 0, zDirection);
   const edgeBlendDistance = edgeContrib * LINE_RADIUS + zContrib * LINE_HALF_THICK;
-  const blendFactor = std.smoothstep(
-    edgeBlendDistance,
-    0.0,
-    zDistance * zContrib + edgeDistance * edgeContrib,
-  );
+  const blendFactor = std.smoothstep(edgeBlendDistance, 0.0, zDistance * zContrib + edgeDistance * edgeContrib);
   const normal2D = d.vec3f(gradient2D.xy, 0);
   const blendedNormal = std.mix(zAxisVector, normal2D, blendFactor * 0.5 + 0.5);
   let normal = std.normalize(blendedNormal);
@@ -340,9 +314,7 @@ const getSliderNormal = (position: d.v3f, hitInfo: d.Infer<typeof HitInfo>) => {
 
 const getNormal = (position: d.v3f, hitInfo: d.Infer<typeof HitInfo>) => {
   'use gpu';
-  if (hitInfo.objectType === ObjectType.SLIDER && hitInfo.t < 0.96) {
-    return getSliderNormal(position, hitInfo);
-  }
+  if (hitInfo.objectType === ObjectType.SLIDER && hitInfo.t < 0.96) return getSliderNormal(position, hitInfo);
   return std.select(getNormalCap(position), getNormalMain(position), hitInfo.objectType === ObjectType.BACKGROUND);
 };
 
@@ -471,13 +443,7 @@ const renderPercentageOnGround = (hitPosition: d.v3f, center: d.v3f, percentage:
   if (uvX < 0.0 || uvX > 1.0 || uvZ < 0.0 || uvZ > 1.0) {
     return d.vec4f();
   }
-  return std.textureSampleLevel(
-    digitsTextureView.$,
-    filteringSampler.$,
-    d.vec2f(uvX, uvZ),
-    percentage,
-    0,
-  );
+  return std.textureSampleLevel(digitsTextureView.$, filteringSampler.$, d.vec2f(uvX, uvZ), percentage, 0);
 };
 
 const renderBackground = (rayOrigin: d.v3f, rayDirection: d.v3f, backgroundHitDist: number, offset: number) => {
@@ -512,11 +478,7 @@ const renderBackground = (rayOrigin: d.v3f, rayDirection: d.v3f, backgroundHitDi
     highlights = density ** 3 * edgeFade * 3 * (1 + lightDir.z) / 1.5;
   }
   const originYBound = std.saturate(rayOrigin.y + 0.01);
-  const posOffset = hitPosition.add(
-    d.vec3f(0, 1, 0).mul(
-      offset * (originYBound / (1.0 + originYBound)) * (1 + randf.sample() / 2),
-    ),
-  );
+  const posOffset = hitPosition.add(d.vec3f(0, 1, 0).mul(offset * (originYBound / (1.0 + originYBound)) * (1 + randf.sample() / 2)));
   const newNormal = getNormalMain(posOffset);
   const jellyColor = jellyColorUniform.$;
   const sqDist = sqLength(hitPosition.sub(d.vec3f(endCapX, 0, 0)));
@@ -546,9 +508,7 @@ const rayMarch = (rayOrigin: d.v3f, rayDirection: d.v3f, uv: d.v2f) => {
   const sliderMin = d.vec3f(bbox.left, bbox.bottom, -zDepth);
   const sliderMax = d.vec3f(bbox.right, bbox.top, zDepth);
   const intersection = intersectBox(rayOrigin, rayDirection, sliderMin, sliderMax);
-  if (!intersection.hit) {
-    return background;
-  }
+  if (!intersection.hit) return background;
   let distanceFromOrigin = std.max(d.f32(0.0), intersection.tMin);
   for (let i = 0; i < MAX_STEPS; i++) {
     if (totalSteps >= MAX_STEPS) break;
@@ -709,9 +669,7 @@ resizeObserver.observe(canvas);
 requestAnimationFrame(render);
 
 async function autoSetQuaility() {
-  if (!hasTimestampQuery) {
-    return 0.5;
-  }
+  if (!hasTimestampQuery) return 0.5;
   const targetFrameTime = 5;
   const tolerance = 2.0;
   let resolutionScale = 0.3;
@@ -734,9 +692,7 @@ async function autoSetQuaility() {
       .draw(3);
     await root.device.queue.onSubmittedWorkDone();
     testTexture.destroy();
-    if (Math.abs(lastTimeMs - targetFrameTime) < tolerance) {
-      break;
-    }
+    if (Math.abs(lastTimeMs - targetFrameTime) < tolerance) break;
     const adjustment = lastTimeMs > targetFrameTime ? -0.1 : 0.1;
     resolutionScale = Math.max(0.3, Math.min(1.0, resolutionScale + adjustment));
   }
